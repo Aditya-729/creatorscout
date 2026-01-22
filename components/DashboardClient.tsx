@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { signIn, signOut, useSession } from "next-auth/react";
 import type { DiscoverResponse, SubscriberRange } from "../types";
 
 const categories = [
@@ -31,7 +30,6 @@ const subscriberRanges: { label: string; range: SubscriberRange }[] = [
 ];
 
 export default function DashboardClient() {
-  const { data: session, status } = useSession();
   const [category, setCategory] = useState(categories[0]);
   const [subcategory, setSubcategory] = useState("");
   const [query, setQuery] = useState("creator tips");
@@ -39,12 +37,9 @@ export default function DashboardClient() {
   const [minVideoCount, setMinVideoCount] = useState(5);
   const [maxResults, setMaxResults] = useState(20);
   const [maxPages, setMaxPages] = useState(1);
-  const [sheetId, setSheetId] = useState<string | undefined>(undefined);
-  const [sheetUrl, setSheetUrl] = useState<string | undefined>(undefined);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [stats, setStats] = useState<DiscoverResponse | null>(null);
-  const [scheduleEnabled, setScheduleEnabled] = useState(false);
 
   const selectedRange =
     subscriberRanges.find((item) => item.label === rangeLabel)?.range ||
@@ -65,8 +60,7 @@ export default function DashboardClient() {
           minVideoCount,
           maxResults,
           maxPages,
-          subcategory: subcategory || undefined,
-          sheetId
+          subcategory: subcategory || undefined
         })
       });
       if (!res.ok) {
@@ -74,8 +68,6 @@ export default function DashboardClient() {
         throw new Error(data.error || "Request failed");
       }
       const data: DiscoverResponse = await res.json();
-      setSheetId(data.sheetId);
-      setSheetUrl(data.sheetUrl);
       setStats(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
@@ -84,31 +76,19 @@ export default function DashboardClient() {
     }
   }
 
+  const results = stats?.results ?? [];
+
+  const formatNumber = (value: number) =>
+    new Intl.NumberFormat("en-US").format(value);
+
   return (
     <section className="space-y-6">
       <header className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-semibold">CreatorScout</h1>
           <p className="text-slate-400">
-            Discover YouTube creators and log them in Google Sheets.
+            Discover YouTube creators instantly from the public API.
           </p>
-        </div>
-        <div>
-          {status === "authenticated" ? (
-            <button
-              onClick={() => signOut()}
-              className="rounded-lg border border-slate-700 px-4 py-2 text-sm hover:border-slate-500"
-            >
-              Sign out
-            </button>
-          ) : (
-            <button
-              onClick={() => signIn("google")}
-              className="rounded-lg bg-white px-4 py-2 text-sm font-medium text-slate-900"
-            >
-              Sign in with Google
-            </button>
-          )}
         </div>
       </header>
 
@@ -205,27 +185,11 @@ export default function DashboardClient() {
         <div className="mt-6 flex flex-wrap items-center gap-4">
           <button
             onClick={handleDiscover}
-            disabled={isLoading || status !== "authenticated"}
+            disabled={isLoading}
             className="rounded-lg bg-indigo-500 px-5 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-700"
           >
             {isLoading ? "Discovering..." : "Discover Creators"}
           </button>
-          <div className="text-sm text-slate-400">
-            {status !== "authenticated"
-              ? "Sign in to create and update Google Sheets."
-              : "Your results append to the same sheet unless you refresh."}
-          </div>
-        </div>
-
-        <div className="mt-4 flex items-center gap-3 text-sm text-slate-300">
-          <input
-            id="schedule"
-            type="checkbox"
-            checked={scheduleEnabled}
-            onChange={(event) => setScheduleEnabled(event.target.checked)}
-            className="h-4 w-4 rounded border-slate-700 bg-slate-900"
-          />
-          <label htmlFor="schedule">Enable scheduled discovery</label>
         </div>
 
         {isLoading && (
@@ -246,64 +210,55 @@ export default function DashboardClient() {
 
         {stats && (
           <div className="mt-6 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm text-emerald-100">
-            Added {stats.added} · Updated {stats.updated} · Skipped{" "}
-            {stats.skipped} · Pages {stats.pagesProcessed}
+            Found {stats.added} creators · Pages {stats.pagesProcessed}
           </div>
         )}
 
-        {sheetUrl && (
-          <div className="mt-4 text-sm text-slate-300">
-            Sheet:{" "}
-            <a
-              href={sheetUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="text-indigo-300 underline"
-            >
-              Open Google Sheet
-            </a>
-          </div>
-        )}
-
-        <div className="mt-6 flex flex-wrap items-center gap-4">
-          <button
-            onClick={async () => {
-              if (!sheetId) {
-                setError("No sheet available yet. Run discovery first.");
-                return;
-              }
-              setError(null);
-              const res = await fetch(`/api/sheets/csv?sheetId=${sheetId}`);
-              if (!res.ok) {
-                const data = await res.json();
-                setError(data.error || "Failed to download CSV");
-                return;
-              }
-              const blob = await res.blob();
-              const url = URL.createObjectURL(blob);
-              const anchor = document.createElement("a");
-              anchor.href = url;
-              anchor.download = "creatorscout.csv";
-              anchor.click();
-              URL.revokeObjectURL(url);
-            }}
-            disabled={status !== "authenticated"}
-            className="rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-200 hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Download CSV
-          </button>
-          {scheduleEnabled && (
-            <div className="text-xs text-slate-400">
-              Cron endpoint: /api/cron/discover?query={encodeURIComponent(query)}
-              &category={encodeURIComponent(category)}
-              {subcategory ? `&subcategory=${encodeURIComponent(subcategory)}` : ""}
-              &minVideoCount={minVideoCount}
-              &maxResults={maxResults}
-              &maxPages={maxPages}
-              {sheetId ? `&sheetId=${sheetId}` : ""}
+        {results.length > 0 && (
+          <div className="mt-6 overflow-hidden rounded-xl border border-slate-800">
+            <div className="max-h-[520px] overflow-auto">
+              <table className="min-w-full divide-y divide-slate-800 text-sm">
+                <thead className="sticky top-0 bg-slate-950">
+                  <tr className="text-left text-slate-300">
+                    <th className="px-4 py-3">Channel</th>
+                    <th className="px-4 py-3">Subscribers</th>
+                    <th className="px-4 py-3">Videos</th>
+                    <th className="px-4 py-3">Description</th>
+                    <th className="px-4 py-3">Link</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800">
+                  {results.map((item) => (
+                    <tr key={item.channelId} className="text-slate-200">
+                      <td className="px-4 py-3 font-medium">
+                        {item.channelTitle || "Untitled"}
+                      </td>
+                      <td className="px-4 py-3">
+                        {formatNumber(item.subscriberCount)}
+                      </td>
+                      <td className="px-4 py-3">
+                        {formatNumber(item.videoCount)}
+                      </td>
+                      <td className="px-4 py-3 text-slate-400">
+                        {item.description || "No description"}
+                      </td>
+                      <td className="px-4 py-3">
+                        <a
+                          href={item.channelUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-indigo-300 underline"
+                        >
+                          Open
+                        </a>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </section>
   );

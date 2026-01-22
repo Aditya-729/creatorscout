@@ -1,12 +1,9 @@
 import { NextResponse } from "next/server";
 import { headers } from "next/headers";
-import { getServerSession } from "next-auth";
-import { authOptions } from "../../../lib/google/authOptions";
 import { discoverRequestSchema } from "../../../lib/validators/discover";
 import { rateLimit } from "../../../lib/utils/rateLimit";
-import { getOAuthClient } from "../../../lib/google/oauth";
 import { logger } from "../../../lib/utils/logger";
-import { runDiscovery } from "../../../lib/services/discovery";
+import { runDiscoveryLite } from "../../../lib/services/discovery";
 import type { DiscoverResponse } from "../../../types";
 
 const MAX_PER_MINUTE = 8;
@@ -24,11 +21,6 @@ export async function POST(request: Request) {
       );
     }
 
-    const session = await getServerSession(authOptions);
-    if (!session?.accessToken) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
     const body = await request.json();
     const parsed = discoverRequestSchema.safeParse(body);
     if (!parsed.success) {
@@ -40,12 +32,7 @@ export async function POST(request: Request) {
 
     const input = parsed.data;
 
-    const auth = getOAuthClient({
-      accessToken: session.accessToken,
-      refreshToken: session.refreshToken
-    });
-
-    const response = await runDiscovery(input, auth);
+    const response = await runDiscoveryLite(input);
     return NextResponse.json(response satisfies DiscoverResponse);
   } catch (error) {
     logger.error({

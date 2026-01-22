@@ -1,8 +1,6 @@
 import type { OAuth2Client } from "google-auth-library";
 import type { DiscoverRequest, DiscoverResponse, ChannelResult } from "../../types";
 import { searchVideoChannelIdsPage, fetchChannels } from "../youtube";
-import { analyzeChannel, classifyLinksWithAI } from "../mino";
-import { extractLinks, preClassifyLinks } from "../utils/links";
 import { nowIso } from "../utils/time";
 import { logger } from "../utils/logger";
 import {
@@ -11,6 +9,8 @@ import {
   getExistingRows,
   updateSubscriberCounts
 } from "../sheets";
+import { analyzeChannel, classifyLinksWithAI } from "../mino";
+import { extractLinks, preClassifyLinks } from "../utils/links";
 
 async function mapWithConcurrency<T, R>(
   items: T[],
@@ -32,6 +32,91 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
+function buildQueryParts(input: DiscoverRequest) {
+  return [input.category, input.subcategory, input.query]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+}
+
+export async function runDiscoveryLite(
+  input: DiscoverRequest
+): Promise<DiscoverResponse> {
+  const warnings: string[] = [];
+  const queryParts = buildQueryParts(input);
+
+  const channelIdSet = new Set<string>();
+  let nextPageToken: string | undefined = undefined;
+  let pagesProcessed = 0;
+
+  for (let page = 1; page <= input.maxPages; page += 1) {
+    const result = await searchVideoChannelIdsPage(
+      queryParts,
+      input.maxResults,
+      nextPageToken
+    );
+    pagesProcessed += 1;
+    result.channelIds.forEach((id) => channelIdSet.add(id));
+    logger.info({
+      message: "YouTube search page processed",
+      data: {
+        page,
+        channelIds: result.channelIds.length,
+        nextPageToken: result.nextPageToken ? "present" : "none"
+      }
+    });
+    if (!result.nextPageToken) break;
+    nextPageToken = result.nextPageToken;
+  }
+
+  const channels = await fetchChannels(Array.from(channelIdSet));
+  logger.info({
+    message: "YouTube channels fetched",
+    data: { count: channels.length }
+  });
+
+  const filtered = channels.filter((channel) => {
+    const minOk =
+      input.subscriberRange.min === null ||
+      channel.subscriberCount >= input.subscriberRange.min;
+    const maxOk =
+      input.subscriberRange.max === null ||
+      channel.subscriberCount <= input.subscriberRange.max;
+    return channel.videoCount >= input.minVideoCount && minOk && maxOk;
+  });
+
+  const results = filtered
+    .map((channel) => {
+      const channelUrl = `https://www.youtube.com/channel/${channel.channelId}`;
+      return {
+        channelId: channel.channelId,
+        channelTitle: channel.title,
+        channelUrl,
+        description: channel.description,
+        subscriberCount: channel.subscriberCount,
+        videoCount: channel.videoCount,
+        instagram: null,
+        tiktok: null,
+        website: null,
+        newsletter: null,
+        ai: null,
+        lastUpdated: nowIso()
+      } satisfies ChannelResult;
+    })
+    .sort((a, b) => b.subscriberCount - a.subscriberCount);
+
+  return {
+    sheetId: "",
+    sheetUrl: "",
+    added: results.length,
+    updated: 0,
+    skipped: 0,
+    pagesProcessed,
+    results,
+    warnings
+  };
+}
+
 export async function runDiscovery(
   input: DiscoverRequest,
   auth: OAuth2Client,
@@ -49,10 +134,7 @@ export async function runDiscovery(
 
   const { map } = await getExistingRows(auth, sheetId);
 
-  const queryParts = [input.category, input.subcategory, input.query]
-    .filter(Boolean)
-    .join(" ")
-    .trim();
+  const queryParts = buildQueryParts(input);
 
   const channelIdSet = new Set<string>();
   let nextPageToken: string | undefined = undefined;
